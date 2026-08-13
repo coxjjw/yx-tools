@@ -147,6 +147,7 @@ type GitHubTarget struct {
 	Repo  string // owner/repo
 	Token string
 	Path  string // 仓库内文件路径
+	Append bool  // true=追加到仓库已有文件（去重），false=覆盖
 }
 
 // UploadToGitHub 把优选列表写入 GitHub 仓库，已存在则更新
@@ -169,19 +170,11 @@ func UploadToGitHub(ctx context.Context, t GitHubTarget, rs []Result, limit int)
 		return 0, fmt.Errorf("没有可上传的结果")
 	}
 
-	var sb strings.Builder
-	for _, r := range rs {
-		port := r.Port
-		if port <= 0 {
-			port = 443
-		}
-		fmt.Fprintf(&sb, "%s:%d#%s\n", r.IP, port, nodeName(r))
-	}
-	content := base64.StdEncoding.EncodeToString([]byte(sb.String()))
 	api := fmt.Sprintf("https://api.github.com/repos/%s/contents/%s", repo, path)
 
-	// 已存在则需要带上 sha 才能更新
+	// 已存在则需要带上 sha 才能更新；追加模式还要读出已有内容
 	sha := ""
+	var existingLines []string
 	{
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, api, nil)
 		req.Header.Set("Authorization", "Bearer "+t.Token)
@@ -190,14 +183,60 @@ func UploadToGitHub(ctx context.Context, t GitHubTarget, rs []Result, limit int)
 			defer resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
 				var meta struct {
-					SHA string `json:"sha"`
+					SHA     string `json:"sha"`
+					Content string `json:"content"`
 				}
 				b, _ := io.ReadAll(resp.Body)
 				_ = json.Unmarshal(b, &meta)
 				sha = meta.SHA
+				if t.Append && meta.Content != "" {
+					if dec, derr := base64.StdEncoding.DecodeString(strings.ReplaceAll(meta.Content, "\n", "")); derr == nil {
+						existingLines = strings.Split(strings.TrimRight(string(dec), "\n"), "\n")
+					}
+				}
 			}
 		}
 	}
+
+	var sb strings.Builder
+	if t.Append {
+		// 追加模式：保留远程已有行，本次结果按 IP:端口 去重后追加
+		seen := make(map[string]bool, len(existingLines)+len(rs))
+		for _, line := range existingLines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			sb.WriteString(line)
+			sb.WriteString("\n")
+			key := line
+			if i := strings.Index(line, "#"); i >= 0 {
+				key = line[:i] // 去重键取 IP:端口，忽略 # 后的备注
+			}
+			seen[key] = true
+		}
+		for _, r := range rs {
+			port := r.Port
+			if port <= 0 {
+				port = 443
+			}
+			key := fmt.Sprintf("%s:%d", r.IP, port)
+			if seen[key] {
+				continue // 已存在则跳过，避免重复行
+			}
+			fmt.Fprintf(&sb, "%s:%d#%s\n", r.IP, port, nodeName(r))
+			seen[key] = true
+		}
+	} else {
+		for _, r := range rs {
+			port := r.Port
+			if port <= 0 {
+				port = 443
+			}
+			fmt.Fprintf(&sb, "%s:%d#%s\n", r.IP, port, nodeName(r))
+		}
+	}
+	content := base64.StdEncoding.EncodeToString([]byte(sb.String()))
 
 	payload := map[string]string{
 		"message": fmt.Sprintf("更新优选 IP (%d 个) %s", len(rs), time.Now().Format("2006-01-02 15:04")),

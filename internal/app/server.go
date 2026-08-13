@@ -319,6 +319,7 @@ func (s *Server) handleUploadGitHub(w http.ResponseWriter, r *http.Request) {
 		Token string `json:"token"`
 		Path  string `json:"path"`
 		Limit int    `json:"limit"`
+		Append bool  `json:"append"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeErr(w, http.StatusBadRequest, "请求格式错误")
@@ -340,7 +341,7 @@ func (s *Server) handleUploadGitHub(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
-	n, err := UploadToGitHub(ctx, GitHubTarget{Repo: in.Repo, Token: in.Token, Path: in.Path}, rs, in.Limit)
+	n, err := UploadToGitHub(ctx, GitHubTarget{Repo: in.Repo, Token: in.Token, Path: in.Path, Append: in.Append}, rs, in.Limit)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return

@@ -391,6 +391,7 @@ async function uploadGitHub() {
         token: $('#cfgToken').value.trim(),
         path: $('#cfgPath').value.trim(),
         limit: +$('#cfgLimit').value || 0,
+        append: $('#cfgAppendGH').checked,
       }),
     });
     toast(`已上传 ${r.count} 个 IP 到 GitHub`, 'ok');
@@ -756,8 +757,13 @@ async function removeCron() {
   await loadConfig();
   try {
     const st = await api('/api/status');
-    if (st.running) { setRunning(true); }
-    if (st.count) { state.results = await api('/api/results'); renderTable(); }
+    if (st.running) {
+      setRunning(true);            // 在跑：交给 SSE 实时填充，避免和 CSV 重复
+    } else {
+      // 未在运行：总是尝试恢复，覆盖 CLI/cron 跑完、或刷新页面后 Runner 为空的空白问题
+      const rs = await api('/api/results');
+      if (Array.isArray(rs) && rs.length) { state.results = rs; renderTable(); }
+    }
   } catch (_) {}
   connectEvents();
 })();

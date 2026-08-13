@@ -70,6 +70,21 @@ func (r *Runner) broadcast(e Event) {
 		r.results = append(r.results, *e.Result)
 	}
 	for ch := range r.subs {
+		// done/error 是终端事件，尽量送达，避免背压把整批结果丢掉
+		if e.Type == "done" || e.Type == "error" {
+			delivered := false
+			for i := 0; i < 10 && !delivered; i++ {
+				select {
+				case ch <- e:
+					delivered = true
+				default:
+					time.Sleep(15 * time.Millisecond)
+				}
+			}
+			if delivered {
+				continue
+			}
+		}
 		select {
 		case ch <- e:
 		default: // 订阅者太慢就丢事件，不阻塞测速
